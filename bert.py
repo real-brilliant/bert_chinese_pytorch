@@ -90,6 +90,11 @@ class DataProcessor(object):
 
 
 class MyPro(DataProcessor):
+    '''自定义数据读取方法，针对json文件
+    
+    Returns:
+        examples: 数据集，包含index、中文文本、类别三个部分
+    '''
     def get_train_examples(self, data_dir):
         return self._create_examples(
             self._read_json(os.path.join(data_dir, "train.json")), 'train')
@@ -241,9 +246,11 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
         else:
             tokens_b.pop()
 
+	
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
     return np.sum(outputs == labels)
+
 
 def copy_optimizer_params_to_model(named_params_model, named_params_optimizer):
     """ Utility function for optimize_on_cpu and 16-bits training.
@@ -255,6 +262,7 @@ def copy_optimizer_params_to_model(named_params_model, named_params_optimizer):
             raise ValueError
         param_model.data.copy_(param_opti.data)
 
+	
 def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_nan=False):
     """ Utility function for optimize_on_cpu and 16-bits training.
         Copy the gradient of the GPU parameters to the CPU/RAMM copy of the model
@@ -274,8 +282,20 @@ def set_optimizer_params_grad(named_params_optimizer, named_params_model, test_n
             param_opti.grad = None
     return is_nan
 
+
 def val(model, processor, args, label_list, tokenizer, device):
-    '''
+    '''模型验证
+    
+    Args:
+        model: 模型
+	processor: 数据读取方法
+	args: 参数表
+	label_list: 所有可能类别
+	tokenizer: 分词方法
+	device
+	
+    Returns:
+        f1: F1值
     '''
     eval_examples = processor.get_dev_examples(args.data_dir)
     eval_features = convert_examples_to_features(
@@ -292,8 +312,6 @@ def val(model, processor, args, label_list, tokenizer, device):
     model.eval()
     predict = np.zeros((0,), dtype=np.int32)
     gt = np.zeros((0,), dtype=np.int32)
-#    eval_loss, eval_accuracy = 0, 0
-#    nb_eval_steps, nb_eval_examples = 0, 0
     for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
         input_ids = input_ids.to(device)
         input_mask = input_mask.to(device)
@@ -301,34 +319,34 @@ def val(model, processor, args, label_list, tokenizer, device):
         label_ids = label_ids.to(device)
  
         with torch.no_grad():
-#            tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
             logits = model(input_ids, segment_ids, input_mask)         
-            #print(logits)
             pred = logits.max(1)[1]
-            #print(pred.cpu().numpy())
             predict = np.hstack((predict, pred.cpu().numpy()))
             gt = np.hstack((gt, label_ids.cpu().numpy()))
 
         logits = logits.detach().cpu().numpy()
         label_ids = label_ids.to('cpu').numpy()
-#        tmp_eval_accuracy = accuracy(logits, label_ids)
 
-#        eval_loss += tmp_eval_loss.mean().item()
-#        eval_accuracy += tmp_eval_accuracy
-
-#        nb_eval_examples += input_ids.size(0)
-#        nb_eval_steps += 1
-
-#    eval_loss = eval_loss / nb_eval_steps
-#    eval_accuracy = eval_accuracy / nb_eval_examples
     print(len(gt))
     f1 = np.mean(metrics.f1_score(predict, gt, average=None))
     print(f1)
 
     return f1
 
+
 def test(model, processor, args, label_list, tokenizer, device):
-    '''
+    '''模型测试
+    
+    Args:
+        model: 模型
+	processor: 数据读取方法
+	args: 参数表
+	label_list: 所有可能类别
+	tokenizer: 分词方法
+	device
+	
+    Returns:
+        f1: F1值
     '''
     test_examples = processor.get_test_examples(args.data_dir)
     test_features = convert_examples_to_features(
@@ -577,8 +595,6 @@ def main():
         best_score = 0
         flags = 0
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
-#            tr_loss = 0
-#            nb_tr_examples, nb_tr_steps = 0, 0
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
@@ -593,9 +609,6 @@ def main():
                     loss = loss / args.gradient_accumulation_steps
                 loss.backward()
                 
-#                tr_loss += loss.item()
-#                nb_tr_examples += input_ids.size(0)
-#                nb_tr_steps += 1
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16 or args.optimize_on_cpu:
                         if args.fp16 and args.loss_scale != 1.0:
@@ -614,7 +627,6 @@ def main():
                     else:
                         optimizer.step()
                     model.zero_grad()
-#                    global_step += 1
     
             f1 = val(model, processor, args, label_list, tokenizer, device)
             if f1 > best_score:
@@ -633,62 +645,7 @@ def main():
 
     model.load_state_dict(torch.load(args.model_save_pth)['state_dict'])
     test(model, processor, args, label_list, tokenizer, device)
-    '''
-    if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        eval_examples = processor.get_dev_examples(args.data_dir)
-        eval_features = convert_examples_to_features(
-            eval_examples, label_list, args.max_seq_length, tokenizer)
-        logger.info("***** Running evaluation *****")
-        logger.info("  Num examples = %d", len(eval_examples))
-        logger.info("  Batch size = %d", args.eval_batch_size)
-        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-        all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
-        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-        # Run prediction for full data
-        eval_sampler = SequentialSampler(eval_data)
-        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-        model.eval()
-        eval_loss, eval_accuracy = 0, 0
-        nb_eval_steps, nb_eval_examples = 0, 0
-        for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
-            input_ids = input_ids.to(device)
-            input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
-            label_ids = label_ids.to(device)
-
-            with torch.no_grad():
-                tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
-                logits = model(input_ids, segment_ids, input_mask)
-
-            logits = logits.detach().cpu().numpy()
-            label_ids = label_ids.to('cpu').numpy()
-            tmp_eval_accuracy = accuracy(logits, label_ids)
-
-            eval_loss += tmp_eval_loss.mean().item()
-            eval_accuracy += tmp_eval_accuracy
-
-            nb_eval_examples += input_ids.size(0)
-            nb_eval_steps += 1
-
-        eval_loss = eval_loss / nb_eval_steps
-        eval_accuracy = eval_accuracy / nb_eval_examples
-
-        result = {'eval_loss': eval_loss,
-                  'eval_accuracy': eval_accuracy,
-                  'global_step': global_step,
-                  'loss': tr_loss/nb_tr_steps}
-
-        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-        with open(output_eval_file, "w") as writer:
-            logger.info("***** Eval results *****")
-            for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
-                writer.write("%s = %s\n" % (key, str(result[key])))
-    '''
-
+	
 
 if __name__ == '__main__':
 	main()
